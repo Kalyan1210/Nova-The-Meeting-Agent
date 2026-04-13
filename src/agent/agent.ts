@@ -4,8 +4,12 @@ import { SYSTEM_PROMPT } from "./prompt.js";
 import { TranscriptBuffer } from "./transcript.js";
 import { searchKnowledge } from "../knowledge/store.js";
 import { createCalendarEvent } from "../calendar/events.js";
+import { listCalendarEvents } from "../calendar/query.js";
 import { searchEmail } from "./tools/email-search.js";
+import { sendEmail } from "./tools/email-send.js";
+import { searchWeb } from "./tools/web-search.js";
 import { writeNote } from "../knowledge/writer.js";
+import { readNote, listNotes } from "../knowledge/reader.js";
 
 const anthropic = new Anthropic({ apiKey: env.anthropic.apiKey });
 
@@ -110,6 +114,101 @@ const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["filename", "content"],
+    },
+  },
+  {
+    name: "send_email",
+    description:
+      "Send an email via Gmail. Use when someone asks to email someone, send a follow-up, " +
+      "share information, or notify a person or team.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        to: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of recipient email addresses.",
+        },
+        subject: {
+          type: "string",
+          description: "Email subject line.",
+        },
+        body: {
+          type: "string",
+          description: "Plain text body of the email.",
+        },
+        cc: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional list of CC recipient email addresses.",
+        },
+      },
+      required: ["to", "subject", "body"],
+    },
+  },
+  {
+    name: "search_web",
+    description:
+      "Search the web for current information, facts, or context not available in the " +
+      "knowledge base. Use for recent news, external documentation, company info, or " +
+      "any question that requires up-to-date public information.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query. Be specific for best results.",
+        },
+        max_results: {
+          type: "number",
+          description: "Number of results to return (default 3, max 5).",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "list_calendar_events",
+    description:
+      "List upcoming Google Calendar events. Use when someone asks what meetings are scheduled, " +
+      "what's on the calendar today, or wants to check availability.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        hours_ahead: {
+          type: "number",
+          description:
+            "How many hours ahead to look (default 24). Use 168 for the next week.",
+        },
+        max_results: {
+          type: "number",
+          description: "Maximum events to return (default 10).",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "read_note",
+    description:
+      "Read the contents of a specific note from the Obsidian vault. Use when someone " +
+      "asks to retrieve, review, or read back a note. To find available notes, " +
+      "omit the filename and set list_notes to true.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        filename: {
+          type: "string",
+          description:
+            "Name of the note to read (without .md extension). " +
+            "Leave empty and set list_notes to true to list all available notes.",
+        },
+        list_notes: {
+          type: "boolean",
+          description: "If true, return a list of all available note names instead of reading one.",
+        },
+      },
+      required: [],
     },
   },
 ];
@@ -272,6 +371,68 @@ export class MeetingAgent {
           };
           console.log(`[Nova] Writing note: "${filename}"`);
           return await writeNote({ filename, content, append });
+        }
+
+        case "send_email": {
+          const { to, subject, body, cc } = block.input as {
+            to: string[];
+            subject: string;
+            body: string;
+            cc?: string[];
+          };
+          console.log(`[Nova] Sending email to: ${to.join(", ")}`);
+          return await sendEmail({ to, subject, body, cc });
+        }
+
+        case "search_web": {
+          const { query, max_results } = block.input as {
+            query: string;
+            max_results?: number;
+          };
+          console.log(`[Nova] Web search: "${query}"`);
+          const results = await searchWeb(query, max_results ?? 3);
+          if (results.length === 0) return "No web results found.";
+          return results
+            .map((r) => `Title: ${r.title}\nURL: ${r.url}\n${r.content}`)
+            .join("\n---\n");
+        }
+
+        case "list_calendar_events": {
+          const { hours_ahead, max_results } = block.input as {
+            hours_ahead?: number;
+            max_results?: number;
+          };
+          console.log(`[Nova] Listing calendar events (next ${hours_ahead ?? 24}h)`);
+          const events = await listCalendarEvents({
+            hoursAhead: hours_ahead,
+            maxResults: max_results,
+          });
+          if (events.length === 0) return "No upcoming events found in that window.";
+          return events
+            .map((e) => {
+              const start = new Date(e.start).toLocaleString();
+              const attendees = e.attendees.length
+                ? `Attendees: ${e.attendees.join(", ")}`
+                : "No attendees listed";
+              const link = e.meetLink ? `\nMeet link: ${e.meetLink}` : "";
+              return `${e.summary}\nStart: ${start}\n${attendees}${link}`;
+            })
+            .join("\n---\n");
+        }
+
+        case "read_note": {
+          const { filename, list_notes: doList } = block.input as {
+            filename?: string;
+            list_notes?: boolean;
+          };
+          if (doList || !filename) {
+            console.log("[Nova] Listing vault notes");
+            const names = await listNotes();
+            if (names.length === 0) return "No notes found in the vault.";
+            return `Available notes:\n${names.map((n) => `- ${n}`).join("\n")}`;
+          }
+          console.log(`[Nova] Reading note: "${filename}"`);
+          return await readNote(filename);
         }
 
         default:

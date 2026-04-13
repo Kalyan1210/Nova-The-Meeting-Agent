@@ -40,6 +40,9 @@ export const env = {
   openclaw: {
     port: parseInt(optional("OPENCLAW_PORT", "18789"), 10),
   },
+  tavily: {
+    apiKey: optional("TAVILY_API_KEY"),
+  },
 } as const;
 
 /**
