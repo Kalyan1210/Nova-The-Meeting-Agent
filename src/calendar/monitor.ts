@@ -48,12 +48,15 @@ export class CalendarMonitor extends EventEmitter {
   private async poll() {
     try {
       const now = new Date();
-      const soon = new Date(now.getTime() + this.lookaheadMs);
+      // Look back 60 min so we catch meetings already in progress,
+      // and forward by the lookahead window for upcoming ones.
+      const windowStart = new Date(now.getTime() - 60 * 60_000);
+      const windowEnd   = new Date(now.getTime() + this.lookaheadMs);
 
       const res = await this.calendar.events.list({
         calendarId: "primary",
-        timeMin: now.toISOString(),
-        timeMax: soon.toISOString(),
+        timeMin: windowStart.toISOString(),
+        timeMax: windowEnd.toISOString(),
         singleEvents: true,
         orderBy: "startTime",
       });
@@ -66,12 +69,11 @@ export class CalendarMonitor extends EventEmitter {
         const meetLink = this.extractMeetLink(event);
         if (!meetLink) continue;
 
-        // Skip events that started more than 2 minutes ago — avoids rejoining
-        // a meeting that already ended after a process restart clears seenEventIds.
-        const startTime = new Date(event.start?.dateTime ?? event.start?.date ?? now);
-        if (now.getTime() - startTime.getTime() > 2 * 60_000) {
-          console.log(`[CalendarMonitor] Skipping past event: "${event.summary ?? event.id}"`);
-          this.seenEventIds.add(event.id); // mark seen so we don't log it every poll
+        // Skip if the meeting's scheduled end time has already passed —
+        // that means it's over and we shouldn't try to join.
+        const endTime = new Date(event.end?.dateTime ?? event.end?.date ?? now);
+        if (endTime.getTime() < now.getTime()) {
+          this.seenEventIds.add(event.id); // mark seen so we don't log every poll
           continue;
         }
 
