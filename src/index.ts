@@ -4,7 +4,7 @@ import { PlaywrightMeetBot } from "./meet/playwright-bot.js";
 import { VoiceActivityDetector } from "./audio/vad.js";
 import { DeepgramTranscriber } from "./audio/deepgram-stt.js";
 import { transcribeAudio } from "./audio/stt.js";
-import { synthesizeSpeech } from "./audio/tts.js";
+import { streamSpeech } from "./audio/tts.js";
 import { MeetingAgent } from "./agent/agent.js";
 import { watchVault } from "./knowledge/watcher.js";
 import { generateMeetingBrief, generateLateJoinerBrief } from "./agent/briefer.js";
@@ -23,8 +23,7 @@ async function speak(
 ) {
   if (!text.trim()) return;
   if (channel === "voice") {
-    const audio = await synthesizeSpeech(text);
-    bot.sendAudio(audio);
+    await bot.sendAudioStream(streamSpeech(text));
   } else {
     await bot.sendChat(text);
   }

@@ -1,46 +1,42 @@
+import OpenAI from "openai";
+import { Readable } from "stream";
 import { env } from "../config/env.js";
 
-const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
+const openai = new OpenAI({ apiKey: env.openai.apiKey });
 
-async function ttsRequest(voiceId: string, text: string): Promise<Response> {
-  return fetch(`${ELEVENLABS_BASE}/text-to-speech/${voiceId}/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "xi-api-key": env.elevenlabs.apiKey,
-    },
-    body: JSON.stringify({
-      text,
-      model_id: "eleven_turbo_v2_5",
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0.0,
-        use_speaker_boost: true,
-      },
-    }),
+/**
+ * Synthesize speech and return a complete MP3 buffer.
+ * Kept for chat-channel responses where streaming is unnecessary.
+ */
+export async function synthesizeSpeech(text: string): Promise<Buffer> {
+  const response = await openai.audio.speech.create({
+    model: "tts-1",
+    voice: "nova",
+    input: text,
+    response_format: "mp3",
   });
+  return Buffer.from(await response.arrayBuffer());
 }
 
 /**
- * Convert text to speech using ElevenLabs streaming API.
- * Automatically falls back to ELEVENLABS_FALLBACK_VOICE_ID when the
- * primary voice returns 402 (paid-tier library voice on a free account).
- * Returns raw audio bytes (mpeg) suitable for playback or WebRTC injection.
+ * Stream speech synthesis as raw PCM chunks (24 kHz, 16-bit, mono, little-endian).
+ * Yields the first chunk in ~100-200ms so the browser can start playing
+ * before synthesis is complete — removes ~400ms of perceived latency vs
+ * waiting for the full audio file.
  */
-export async function synthesizeSpeech(text: string): Promise<Buffer> {
-  let response = await ttsRequest(env.elevenlabs.voiceId, text);
+export async function* streamSpeech(text: string): AsyncGenerator<Buffer> {
+  const response = await openai.audio.speech.create({
+    model: "tts-1",
+    voice: "nova",
+    input: text,
+    response_format: "pcm", // 24 kHz, Int16 LE, mono — no decode needed
+  });
 
-  if (response.status === 402 && env.elevenlabs.fallbackVoiceId !== env.elevenlabs.voiceId) {
-    console.warn("[TTS] Primary voice returned 402 — falling back to free-tier voice.");
-    response = await ttsRequest(env.elevenlabs.fallbackVoiceId, text);
+  const nodeStream = Readable.fromWeb(
+    response.body as import("stream/web").ReadableStream<Uint8Array>
+  );
+
+  for await (const chunk of nodeStream) {
+    yield chunk as Buffer;
   }
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`ElevenLabs TTS failed (${response.status}): ${body}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
 }

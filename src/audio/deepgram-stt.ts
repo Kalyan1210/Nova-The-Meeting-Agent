@@ -49,8 +49,8 @@ export class DeepgramTranscriber extends EventEmitter {
       sample_rate: 16000,
       channels: 1,
       interim_results: false,
-      // End of speech detection — emit final transcript after 500ms silence
-      endpointing: 500,
+      // End of speech detection — emit final transcript after 200ms silence
+      endpointing: 200,
       // Boost "Nova" so Deepgram stops mishearing it as "Noah"
       keywords: ["Nova:3"],
     });

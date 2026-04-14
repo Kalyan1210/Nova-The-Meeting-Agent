@@ -111,6 +111,48 @@ const BROWSER_INIT_SCRIPT = /* js */ `
     }
   };
 
+  // ── PCM streaming injection (low-latency path) ────────────────────────────
+  // Receives raw 24 kHz Int16 LE mono chunks and schedules them back-to-back
+  // on the AudioContext timeline for gapless playback.
+  let _pcmScheduledUntil = 0;
+
+  window.__injectPCMChunk = function (base64Pcm, isFirst) {
+    ensureAudioCtx();
+    try {
+      const bin = atob(base64Pcm);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+      // View raw bytes as 16-bit little-endian PCM samples
+      const i16 = new Int16Array(bytes.buffer);
+      const f32 = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+
+      const now = audioCtx.currentTime;
+      // On the first chunk (or after a gap), reset schedule with a small buffer
+      if (isFirst || _pcmScheduledUntil < now + 0.01) {
+        _pcmScheduledUntil = now + 0.06; // 60ms initial buffer to absorb jitter
+      }
+
+      const buf = audioCtx.createBuffer(1, f32.length, 24000);
+      buf.getChannelData(0).set(f32);
+
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioDest);
+      src.start(_pcmScheduledUntil);
+      _pcmScheduledUntil += buf.duration;
+    } catch (e) {
+      console.warn('[Nova] PCM chunk error:', e);
+    }
+  };
+
+  window.__pcmStreamEnd = function () {
+    // Turn off the speaking indicator once all queued audio has played
+    const remaining = Math.max(0, (_pcmScheduledUntil - audioCtx.currentTime) * 1000 + 50);
+    setTimeout(() => window.__novaSetSpeaking(false), remaining);
+  };
+
   // ── getUserMedia override — return avatar canvas + Nova's audio stream ─────
   const _origGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 
@@ -497,6 +539,35 @@ export class PlaywrightMeetBot extends EventEmitter {
   }
 
   // ── Audio / chat outbound ──────────────────────────────────────────────────
+
+  /**
+   * Stream raw PCM chunks (24 kHz Int16 LE mono) into the meeting.
+   * Sends each chunk to the browser as it arrives so playback starts
+   * on the first chunk (~100ms) instead of waiting for the full file.
+   */
+  async sendAudioStream(chunks: AsyncGenerator<Buffer>): Promise<void> {
+    if (!this.page) return;
+    let isFirst = true;
+    try {
+      await this.page.evaluate(() => (window as any).__novaSetSpeaking(true));
+      for await (const chunk of chunks) {
+        const b64 = chunk.toString("base64");
+        await this.page
+          .evaluate(
+            ([data, first]: [string, boolean]) =>
+              (window as any).__injectPCMChunk(data, first),
+            [b64, isFirst] as [string, boolean]
+          )
+          .catch(() => {});
+        isFirst = false;
+      }
+      await this.page
+        .evaluate(() => (window as any).__pcmStreamEnd())
+        .catch(() => {});
+    } catch (err) {
+      console.error("[PlaywrightBot] sendAudioStream error:", err);
+    }
+  }
 
   /**
    * Inject Nova's synthesized MPEG audio into the meeting.
