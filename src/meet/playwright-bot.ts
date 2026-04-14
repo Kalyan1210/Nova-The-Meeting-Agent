@@ -502,6 +502,14 @@ export class PlaywrightMeetBot extends EventEmitter {
    * Poll the page every 2 seconds for new chat messages.
    * More reliable than MutationObserver because it doesn't depend on
    * specific DOM selectors being available at the right moment.
+   *
+   * Two strategies, tried in order:
+   *   1. data-message-id containers — queries the specific text child element
+   *      so we never get sender name / timestamp fused into the text.
+   *   2. jsname-based (newer Meet UI) — only used when strategy 1 finds nothing.
+   *
+   * Deduplication is keyed on the stable message ID (not on sender:text) so
+   * the same user can send the same message twice without being silently dropped.
    */
   private startChatPolling(): void {
     const seen = new Set<string>();
@@ -510,56 +518,55 @@ export class PlaywrightMeetBot extends EventEmitter {
       if (!this.page) return;
       try {
         const messages = await this.page.evaluate(() => {
-          const results: Array<{ id: string; sender: string; text: string }> =
-            [];
+          const results: Array<{ id: string; sender: string; text: string }> = [];
 
-          // Strategy 1: data-message-id (older Meet versions)
+          // ── Strategy 1: data-message-id containers ───────────────────────────
+          // Each container holds separate child elements for sender, timestamp,
+          // and message text.  We query the *text child* specifically so that
+          // el.textContent never fuses "SENDER12:34 AMmessage" into one string.
           document.querySelectorAll("[data-message-id]").forEach((el) => {
             const id = el.getAttribute("data-message-id") || "";
             const sender =
-              el
-                .querySelector("[data-sender-email]")
-                ?.getAttribute("data-sender-email") ||
+              el.querySelector("[data-sender-email]")?.getAttribute("data-sender-email") ||
               el.querySelector("[data-self-name]")?.textContent?.trim() ||
               "unknown";
-            const text =
-              el.querySelector("[data-message-text]")?.textContent?.trim() ||
-              el.querySelector(".GDhqjd")?.textContent?.trim() ||
-              "";
+            // Target only the message text child — NOT the container's full textContent
+            const textEl =
+              el.querySelector("[data-message-text]") ||
+              el.querySelector(".GDhqjd");
+            const text = textEl?.textContent?.trim() || "";
             if (id && text) results.push({ id, sender, text });
           });
 
-          // Strategy 2: jsname-based (newer Meet versions)
-          document.querySelectorAll('[jsname="xySENc"]').forEach((el, i) => {
-            const text = el.textContent?.trim() || "";
-            const senderEl = el
-              .closest('[jsname="Imjpbc"]')
-              ?.querySelector('[jsname="r4nke"]');
-            const sender = senderEl?.textContent?.trim() || "unknown";
-            const id = `jsname-${i}-${text.slice(0, 30)}`;
-            if (text) results.push({ id, sender, text });
-          });
-
-          // Strategy 3: chat list items with role
-          document
-            .querySelectorAll('[data-is-bot-message], [data-message-text]')
-            .forEach((el) => {
-              const id =
-                el.getAttribute("data-message-id") ||
-                `attr-${el.textContent?.slice(0, 30)}`;
+          // ── Strategy 2: jsname-based selectors (newer Meet UI) ──────────────
+          // Only run when strategy 1 found nothing (avoids double-emit).
+          if (results.length === 0) {
+            document.querySelectorAll('[jsname="xySENc"]').forEach((el) => {
               const text = el.textContent?.trim() || "";
-              if (text) results.push({ id, sender: "unknown", text });
+              if (!text) return;
+              const msgContainer = el.closest('[jsname="Imjpbc"]');
+              const senderEl = msgContainer?.querySelector('[jsname="r4nke"]');
+              const sender = senderEl?.textContent?.trim() || "unknown";
+              // Content-based ID so index-shifting doesn't cause duplicates
+              const id = `jsname:${sender}:${text.slice(0, 60)}`;
+              results.push({ id, sender, text });
             });
+          }
 
           return results;
         });
 
         for (const msg of messages) {
-          const key = `${msg.sender}:${msg.text}`;
-          if (!seen.has(key) && msg.text.trim()) {
-            seen.add(key);
-            console.log(`[Chat captured] ${msg.sender}: ${msg.text}`);
-            this.emit("chat", msg.sender, msg.text);
+          // Dedup by stable message ID — not by sender:text
+          if (!seen.has(msg.id) && msg.text.trim()) {
+            seen.add(msg.id);
+            // Safety: strip any leading "SENDER NAME HH:MM AM/PM" prefix that
+            // can appear when a container element leaks into the result.
+            const text = msg.text
+              .replace(/^[A-Z][A-Z\s]*\d{1,2}:\d{2}\s*(?:AM|PM)\s*/i, "")
+              .trim() || msg.text;
+            console.log(`[Chat captured] ${msg.sender}: ${text}`);
+            this.emit("chat", msg.sender, text);
           }
         }
       } catch {

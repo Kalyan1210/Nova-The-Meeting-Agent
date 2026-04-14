@@ -5,9 +5,10 @@ import { env } from "../config/env.js";
  * Both voice transcripts and chat messages must match one of these.
  */
 const WAKE_PATTERNS = [
-  /\bhey\s+nova\b/i,    // "hey nova ..."
+  /hey\s+nova/i,        // "hey nova" — no \b so works in concatenated chat text
+  /hey\s+noah/i,        // Deepgram/Whisper often mishears "Nova" as "Noah"
   /\bnova[,!?:]\s/i,    // "nova, ..." / "nova! ..."
-  /^nova\s/i,           // "nova what is ..."
+  /^nova[\s,]/i,        // "nova what is ..."
 ];
 
 /**
