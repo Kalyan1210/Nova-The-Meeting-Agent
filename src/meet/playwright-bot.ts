@@ -372,16 +372,32 @@ export class PlaywrightMeetBot extends EventEmitter {
   private async handleJoinFlow(): Promise<void> {
     const page = this.page!;
 
-    // Hard-stop phrases — bail out immediately if seen
+    // Sign-in prompt — session cookies expired, need meet-auth re-run
+    const signInPhrases = [
+      "sign in",
+      "enter your name",
+      "join as a guest",
+    ];
+
+    // Hard-stop phrases — meeting ended or account explicitly blocked
     const errorPhrases = [
       "you can't join this video call",
       "this call has ended",
       "meeting has ended",
       "no longer available",
-      "you're not allowed",
     ];
 
     const checkErrors = async () => {
+      for (const phrase of signInPhrases) {
+        try {
+          const el = await page.$(`text=/${phrase}/i`);
+          if (el) throw new Error(
+            `Nova's session expired — run \`npm run meet-auth\` to sign in again as nova@agenticrealm.org`
+          );
+        } catch (e) {
+          if ((e as Error).message.startsWith("Nova's session")) throw e;
+        }
+      }
       for (const phrase of errorPhrases) {
         try {
           const el = await page.$(`text=/${phrase}/i`);
