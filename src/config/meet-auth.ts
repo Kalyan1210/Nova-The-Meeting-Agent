@@ -39,24 +39,40 @@ async function main() {
   const page = await context.newPage();
   await page.goto("https://meet.google.com", { waitUntil: "domcontentloaded" });
 
+  console.log("  Sign in, then wait for Meet homepage to fully load.");
+  console.log("  Cookies are saved automatically — just close the window when done.\n");
+
+  // Save cookies immediately once Meet's homepage finishes loading (after sign-in redirect).
+  // This fires regardless of whether the user closes a tab or the whole browser.
+  let saved = false;
+
+  const trySave = async (label: string) => {
+    if (saved) return;
+    const cookies = await context.cookies().catch(() => []);
+    if (cookies.length === 0) return;
+    saved = true;
+    await saveCookies(cookies);
+    console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log(`  Done! ${cookies.length} session cookies saved (${label}).`);
+    console.log("  Nova can now join meetings headlessly.");
+    console.log("  You can close the browser and press Ctrl+C to exit.");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+  };
+
+  // Fire on every full navigation so we catch the post-login redirect
+  page.on("load", () => trySave("page load").catch(() => {}));
+
+  // Also fire when tab or browser closes (original behaviour)
+  page.on("close", () => trySave("tab close").catch(() => {}));
+  browser.on("disconnected", () => trySave("browser close").catch(() => {}));
+
   await new Promise<void>((resolve) => {
     browser.on("disconnected", () => resolve());
-    console.log("  Waiting for you to sign in and close the browser...");
+    // Also resolve if process is interrupted so cookies are flushed
+    process.on("SIGINT", () => {
+      trySave("SIGINT").finally(() => resolve());
+    });
   });
-
-  const cookies = await context.cookies().catch(() => []);
-
-  if (cookies.length === 0) {
-    console.error("\n  No cookies captured. Did you sign in before closing?");
-    process.exit(1);
-  }
-
-  await saveCookies(cookies);
-
-  console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log(`  Done! ${cookies.length} session cookies saved.`);
-  console.log("  Nova can now join meetings headlessly.");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
 
 main().catch((err) => {

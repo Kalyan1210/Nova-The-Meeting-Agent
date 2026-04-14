@@ -51,7 +51,7 @@ export class CalendarMonitor extends EventEmitter {
       const soon = new Date(now.getTime() + this.lookaheadMs);
 
       const res = await this.calendar.events.list({
-        calendarId: env.google.agentEmail,
+        calendarId: "primary",
         timeMin: now.toISOString(),
         timeMax: soon.toISOString(),
         singleEvents: true,
