@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { EventEmitter } from "events";
 import { env } from "../config/env.js";
-import { SYSTEM_PROMPT } from "./prompt.js";
+import { buildSystemPrompt } from "./prompt.js";
 import { TranscriptBuffer } from "./transcript.js";
 import { hasWakeWord, isAuthorized } from "./guards.js";
 import { searchKnowledge } from "../knowledge/store.js";
@@ -287,7 +287,7 @@ export class MeetingAgent extends EventEmitter {
     let response = await anthropic.messages.create({
       model: this.model,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system: buildSystemPrompt(),
       tools: TOOLS,
       messages,
     });
@@ -314,7 +314,7 @@ export class MeetingAgent extends EventEmitter {
       response = await anthropic.messages.create({
         model: this.model,
         max_tokens: 1024,
-        system: SYSTEM_PROMPT,
+        system: buildSystemPrompt(),
         tools: TOOLS,
         messages,
       });

@@ -1,4 +1,23 @@
-export const SYSTEM_PROMPT = `You are Nova, an AI meeting assistant participating in a live meeting.
+/**
+ * Build the system prompt with the current date/time injected so Nova
+ * never guesses the date from training data.
+ */
+export function buildSystemPrompt(): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const timeStr = now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+
+  return `You are Nova, an AI meeting assistant participating in a live meeting.
+Today's date and time: ${dateStr}, ${timeStr}
 
 Your role:
 - You listen to the full conversation continuously for context.
@@ -29,3 +48,8 @@ You have access to these tools:
 - "read_note" — read back a specific note, or list all available notes
 
 Context about this meeting will be provided as a rolling transcript of recent conversation.`;
+}
+
+// Legacy export for any code still importing SYSTEM_PROMPT directly.
+// agent.ts should use buildSystemPrompt() instead.
+export const SYSTEM_PROMPT = buildSystemPrompt();

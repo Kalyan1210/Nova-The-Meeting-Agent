@@ -51,6 +51,8 @@ export class DeepgramTranscriber extends EventEmitter {
       interim_results: false,
       // End of speech detection — emit final transcript after 500ms silence
       endpointing: 500,
+      // Boost "Nova" so Deepgram stops mishearing it as "Noah"
+      keywords: ["Nova:3"],
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -93,9 +95,13 @@ export class DeepgramTranscriber extends EventEmitter {
         if (data.is_final === false) return;
 
         const speakerId: number = alt.words?.[0]?.speaker ?? 0;
+        // Correct common Deepgram mishearing: "Noah" → "Nova"
+        const corrected = alt.transcript.trim()
+          .replace(/\bhey\s+noah\b/gi, "hey Nova")
+          .replace(/\bnoah\b/g, "Nova");
         const utterance: Utterance = {
           speaker: `Speaker ${speakerId}`,
-          text: alt.transcript.trim(),
+          text: corrected,
         };
 
         this.emit("utterance", utterance);

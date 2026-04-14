@@ -594,6 +594,9 @@ export class PlaywrightMeetBot extends EventEmitter {
    */
   private startChatPolling(): void {
     const seen = new Set<string>();
+    // Track how many times each content-based ID appeared so that a user
+    // sending the same message twice still gets processed the second time.
+    const seenCount = new Map<string, number>();
 
     const poll = async () => {
       if (!this.page) return;
@@ -638,17 +641,24 @@ export class PlaywrightMeetBot extends EventEmitter {
         });
 
         for (const msg of messages) {
-          // Dedup by stable message ID — not by sender:text
-          if (!seen.has(msg.id) && msg.text.trim()) {
-            seen.add(msg.id);
-            // Safety: strip any leading "SENDER NAME HH:MM AM/PM" prefix that
-            // can appear when a container element leaks into the result.
-            const text = msg.text
-              .replace(/^[A-Z][A-Z\s]*\d{1,2}:\d{2}\s*(?:AM|PM)\s*/i, "")
-              .trim() || msg.text;
-            console.log(`[Chat captured] ${msg.sender}: ${text}`);
-            this.emit("chat", msg.sender, text);
-          }
+          // For stable DOM IDs (Strategy 1), dedup by ID once.
+          // For content-based IDs (Strategy 2), allow re-processing if the
+          // same ID appears more times than previously seen (user sent same
+          // message again).
+          const prevCount = seenCount.get(msg.id) ?? 0;
+          const currCount = messages.filter((m) => m.id === msg.id).length;
+          if (seen.has(msg.id) && currCount <= prevCount) continue;
+          if (!msg.text.trim()) continue;
+
+          seenCount.set(msg.id, currCount);
+          seen.add(msg.id);
+
+          // Safety: strip any leading "SENDER NAME HH:MM AM/PM" prefix
+          const text = msg.text
+            .replace(/^[A-Z][A-Z\s]*\d{1,2}:\d{2}\s*(?:AM|PM)\s*/i, "")
+            .trim() || msg.text;
+          console.log(`[Chat captured] ${msg.sender}: ${text}`);
+          this.emit("chat", msg.sender, text);
         }
       } catch {
         // Page closed or navigated — polling will stop via interval clear
