@@ -22,12 +22,9 @@ export interface Utterance {
  *   'closed'     ()                   — connection closed
  */
 export class DeepgramTranscriber extends EventEmitter {
-  private live: ReturnType<
-    ReturnType<ReturnType<typeof createClient>["listen"]["live"]>["on"]
-  > | null = null;
-  private connection: Awaited<ReturnType<typeof createClient>> | null = null;
   private liveConn: any = null;
   private connected = false;
+  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * Open the Deepgram WebSocket. Call once per meeting.
@@ -66,6 +63,17 @@ export class DeepgramTranscriber extends EventEmitter {
         clearTimeout(timeout);
         this.connected = true;
         console.log("[Deepgram] Streaming connection open.");
+        // Send keepalive every 8s so the connection stays alive
+        // even during periods of silence in the meeting.
+        this.keepAliveTimer = setInterval(() => {
+          if (this.connected && this.liveConn) {
+            try {
+              this.liveConn.keepAlive();
+            } catch {
+              // Connection may have dropped — will be caught by Close event
+            }
+          }
+        }, 8_000);
         resolve();
       });
 
@@ -96,6 +104,7 @@ export class DeepgramTranscriber extends EventEmitter {
 
     this.liveConn.on(LiveTranscriptionEvents.Close, () => {
       this.connected = false;
+      this.stopKeepAlive();
       console.log("[Deepgram] Connection closed.");
       this.emit("closed");
     });
@@ -115,10 +124,18 @@ export class DeepgramTranscriber extends EventEmitter {
     }
   }
 
+  private stopKeepAlive(): void {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
+  }
+
   /**
    * Gracefully close the Deepgram connection.
    */
   disconnect(): void {
+    this.stopKeepAlive();
     if (this.liveConn) {
       try {
         this.liveConn.finish();

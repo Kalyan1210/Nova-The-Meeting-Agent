@@ -110,6 +110,10 @@ async function handleMeeting(meeting: UpcomingMeeting) {
     let deepgramActive = false;
 
     try {
+      // Wait 5s for WebRTC audio tracks to establish before opening
+      // the Deepgram socket — prevents immediate close from no audio.
+      console.log("[Main] Waiting for WebRTC audio to settle before Deepgram...");
+      await delay(5000);
       await transcriber.connect();
       deepgramActive = true;
     } catch (err) {
