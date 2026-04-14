@@ -39,36 +39,42 @@ async function main() {
   const page = await context.newPage();
   await page.goto("https://meet.google.com", { waitUntil: "domcontentloaded" });
 
-  console.log("  Sign in, then wait for Meet homepage to fully load.");
-  console.log("  Cookies are saved automatically — just close the window when done.\n");
+  console.log("  Sign in to nova@agenticrealm.org in the browser.");
+  console.log("  Cookies will be saved automatically once you reach Meet's homepage.\n");
 
-  // Save cookies immediately once Meet's homepage finishes loading (after sign-in redirect).
-  // This fires regardless of whether the user closes a tab or the whole browser.
   let saved = false;
+
+  // Google's session identity cookies — only present when signed in.
+  // We check for these so we don't save pre-auth cookies by mistake.
+  const SESSION_COOKIE_NAMES = new Set([
+    "SID", "HSID", "SSID", "APISID", "SAPISID",
+    "__Secure-1PSID", "__Secure-3PSID",
+  ]);
 
   const trySave = async (label: string) => {
     if (saved) return;
     const cookies = await context.cookies().catch(() => []);
-    if (cookies.length === 0) return;
+    const hasSession = cookies.some((c) => SESSION_COOKIE_NAMES.has(c.name));
+    if (!hasSession) {
+      console.log("  (Not signed in yet — waiting...)");
+      return;
+    }
     saved = true;
     await saveCookies(cookies);
     console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log(`  Done! ${cookies.length} session cookies saved (${label}).`);
     console.log("  Nova can now join meetings headlessly.");
-    console.log("  You can close the browser and press Ctrl+C to exit.");
+    console.log("  Close the browser or press Ctrl+C to exit.");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   };
 
-  // Fire on every full navigation so we catch the post-login redirect
+  // Check on every page load (catches the post-login redirect back to Meet)
   page.on("load", () => trySave("page load").catch(() => {}));
-
-  // Also fire when tab or browser closes (original behaviour)
   page.on("close", () => trySave("tab close").catch(() => {}));
   browser.on("disconnected", () => trySave("browser close").catch(() => {}));
 
   await new Promise<void>((resolve) => {
     browser.on("disconnected", () => resolve());
-    // Also resolve if process is interrupted so cookies are flushed
     process.on("SIGINT", () => {
       trySave("SIGINT").finally(() => resolve());
     });
