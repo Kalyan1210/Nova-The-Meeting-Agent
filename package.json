@@ -24,7 +24,8 @@
     "dotenv": "^17.3.1",
     "googleapis": "^171.4.0",
     "openai": "^6.33.0",
-    "playwright": "^1.50.0"
+    "playwright": "^1.50.0",
+    "@deepgram/sdk": "^3.9.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

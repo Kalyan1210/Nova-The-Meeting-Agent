@@ -173,12 +173,10 @@ const BROWSER_INIT_SCRIPT = /* js */ `
   window.RTCPeerConnection = NovaRTCPeerConnection;
 
   // ── Chat message observer ──────────────────────────────────────────────────
-  // Watch for new chat messages after the meeting UI loads.
   function startChatObserver() {
     const seen = new Set();
 
     const observer = new MutationObserver(() => {
-      // Google Meet renders chat messages in elements with data-sender-name
       const msgs = document.querySelectorAll('[data-message-id]');
       msgs.forEach(el => {
         const id = el.getAttribute('data-message-id');
@@ -203,11 +201,55 @@ const BROWSER_INIT_SCRIPT = /* js */ `
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // Start chat observer after the page settles
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startChatObserver);
-  } else {
+  // ── Participant join observer ───────────────────────────────────────────────
+  function startParticipantObserver() {
+    const knownParticipants = new Set();
+
+    // Seed initial set so we don't fire for people already in the room
+    function seedInitial() {
+      const nameSelectors = [
+        '[data-self-name]',
+        '.zWGUib',          // Google Meet participant name class
+        '[data-participant-id] span',
+      ];
+      nameSelectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => {
+          const name = el.textContent?.trim();
+          if (name) knownParticipants.add(name);
+        });
+      });
+    }
+    seedInitial();
+
+    const observer = new MutationObserver(() => {
+      const nameSelectors = ['[data-self-name]', '.zWGUib'];
+      nameSelectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => {
+          const name = el.textContent?.trim();
+          if (name && !knownParticipants.has(name)) {
+            knownParticipants.add(name);
+            if (window.__novaParticipantJoined) {
+              window.__novaParticipantJoined(name);
+            }
+          }
+        });
+      });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // Start observers after DOM is ready and meeting UI has loaded
+  function startAll() {
     startChatObserver();
+    // Delay participant observer so the initial room state is seeded correctly
+    setTimeout(startParticipantObserver, 6000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startAll);
+  } else {
+    startAll();
   }
 
 })();
@@ -279,6 +321,13 @@ export class PlaywrightMeetBot extends EventEmitter {
       "__novaChatCallback",
       (sender: string, text: string) => {
         this.emit("chat", sender, text);
+      }
+    );
+
+    await this.page.exposeFunction(
+      "__novaParticipantJoined",
+      (name: string) => {
+        this.emit("participant-joined", name);
       }
     );
 

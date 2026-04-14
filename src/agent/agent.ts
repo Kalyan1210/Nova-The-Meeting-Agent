@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { EventEmitter } from "events";
 import { env } from "../config/env.js";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import { TranscriptBuffer } from "./transcript.js";
@@ -223,7 +224,7 @@ export interface AgentResponse {
  * Nova — core agent that processes meeting conversation and generates responses.
  * Uses Claude with tool use to query knowledge, create events, search email, and take notes.
  */
-export class MeetingAgent {
+export class MeetingAgent extends EventEmitter {
   private transcript = new TranscriptBuffer();
   private model = "claude-sonnet-4-20250514";
 
@@ -248,7 +249,17 @@ export class MeetingAgent {
     // Strip the wake word before passing to Claude so it doesn't
     // repeat "hey nova" back at the user.
     const cleaned = text.replace(/^(hey\s+nova[,!?:]?\s*|nova[,!?:]?\s+)/i, "").trim();
-    return this.generateResponse(cleaned || text);
+    const response = await this.generateResponse(cleaned || text);
+
+    // Emit so external listeners (conflict detector, etc.) can react
+    this.emit("utterance-processed", text);
+
+    return response;
+  }
+
+  /** Expose the rolling transcript for external use (conflict detector, late joiner brief). */
+  getTranscriptText(): string {
+    return this.transcript.format();
   }
 
   private shouldRespond(
