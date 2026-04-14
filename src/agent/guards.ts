@@ -33,11 +33,14 @@ export function isAuthorized(
   source: "voice" | "chat"
 ): boolean {
   // Voice: anyone in the meeting can invoke Nova via wake word.
-  // You control who is in the meeting, so this is safe.
   if (source === "voice") return true;
 
   const list = env.agent.authorizedEmails;
   if (list.length === 0) return true; // no restriction configured
+
+  // If we couldn't identify the sender (Meet DOM didn't expose email),
+  // allow it — they were invited to the meeting, so they're trusted.
+  if (!speakerEmail || speakerEmail === "unknown") return true;
 
   return list.some(
     (e) => e.toLowerCase() === speakerEmail.toLowerCase()

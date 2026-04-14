@@ -331,6 +331,14 @@ export class PlaywrightMeetBot extends EventEmitter {
       }
     );
 
+    // Forward browser console logs to Node.js for debugging
+    this.page.on("console", (msg) => {
+      const t = msg.type();
+      if (t === "warning" || t === "error") {
+        console.log(`[Browser:${t}] ${msg.text()}`);
+      }
+    });
+
     console.log(`[PlaywrightBot] Navigating to ${meetLink}`);
     await this.page.goto(meetLink, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
@@ -338,6 +346,12 @@ export class PlaywrightMeetBot extends EventEmitter {
     await saveCookies(await this.context.cookies());
 
     await this.handleJoinFlow();
+
+    // Open chat panel so the DOM is populated with messages
+    await this.openChatPanel();
+
+    // Start Playwright-native chat polling (more reliable than DOM observer)
+    this.startChatPolling();
 
     this.watchDisconnect();
 
@@ -466,6 +480,95 @@ export class PlaywrightMeetBot extends EventEmitter {
     } catch (err) {
       console.error("[PlaywrightBot] sendChat error:", err);
     }
+  }
+
+  // ── Chat panel ────────────────────────────────────────────────────────────
+
+  private async openChatPanel(): Promise<void> {
+    const page = this.page!;
+    const chatButtonSelectors = [
+      '[aria-label*="Chat with everyone" i]',
+      '[aria-label*="chat" i][role="button"]',
+      '[data-tooltip*="Chat" i]',
+      '[jsname="A5il2e"]',
+      'button[jsname="A5il2e"]',
+    ];
+    await this.tryClick(page, chatButtonSelectors);
+    await page.waitForTimeout(1000);
+    console.log("[PlaywrightBot] Chat panel opened.");
+  }
+
+  /**
+   * Poll the page every 2 seconds for new chat messages.
+   * More reliable than MutationObserver because it doesn't depend on
+   * specific DOM selectors being available at the right moment.
+   */
+  private startChatPolling(): void {
+    const seen = new Set<string>();
+
+    const poll = async () => {
+      if (!this.page) return;
+      try {
+        const messages = await this.page.evaluate(() => {
+          const results: Array<{ id: string; sender: string; text: string }> =
+            [];
+
+          // Strategy 1: data-message-id (older Meet versions)
+          document.querySelectorAll("[data-message-id]").forEach((el) => {
+            const id = el.getAttribute("data-message-id") || "";
+            const sender =
+              el
+                .querySelector("[data-sender-email]")
+                ?.getAttribute("data-sender-email") ||
+              el.querySelector("[data-self-name]")?.textContent?.trim() ||
+              "unknown";
+            const text =
+              el.querySelector("[data-message-text]")?.textContent?.trim() ||
+              el.querySelector(".GDhqjd")?.textContent?.trim() ||
+              "";
+            if (id && text) results.push({ id, sender, text });
+          });
+
+          // Strategy 2: jsname-based (newer Meet versions)
+          document.querySelectorAll('[jsname="xySENc"]').forEach((el, i) => {
+            const text = el.textContent?.trim() || "";
+            const senderEl = el
+              .closest('[jsname="Imjpbc"]')
+              ?.querySelector('[jsname="r4nke"]');
+            const sender = senderEl?.textContent?.trim() || "unknown";
+            const id = `jsname-${i}-${text.slice(0, 30)}`;
+            if (text) results.push({ id, sender, text });
+          });
+
+          // Strategy 3: chat list items with role
+          document
+            .querySelectorAll('[data-is-bot-message], [data-message-text]')
+            .forEach((el) => {
+              const id =
+                el.getAttribute("data-message-id") ||
+                `attr-${el.textContent?.slice(0, 30)}`;
+              const text = el.textContent?.trim() || "";
+              if (text) results.push({ id, sender: "unknown", text });
+            });
+
+          return results;
+        });
+
+        for (const msg of messages) {
+          const key = `${msg.sender}:${msg.text}`;
+          if (!seen.has(key) && msg.text.trim()) {
+            seen.add(key);
+            console.log(`[Chat captured] ${msg.sender}: ${msg.text}`);
+            this.emit("chat", msg.sender, msg.text);
+          }
+        }
+      } catch {
+        // Page closed or navigated — polling will stop via interval clear
+      }
+    };
+
+    const interval = setInterval(poll, 2000);
+    this.page!.on("close", () => clearInterval(interval));
   }
 
   // ── Disconnection monitor ──────────────────────────────────────────────────
