@@ -89,22 +89,9 @@ async function handleMeeting(meeting: UpcomingMeeting) {
     }
   };
 
-  if (env.deepgram.apiKey) {
-    // ── Deepgram streaming path ──────────────────────────────────────────────
-    const transcriber = new DeepgramTranscriber();
-    try {
-      await transcriber.connect();
-    } catch (err) {
-      console.error("[Main] Deepgram failed, falling back to Whisper:", err);
-    }
-
-    bot.on("audio", (frame: Buffer) => transcriber.sendAudio(frame));
-    transcriber.on("utterance", ({ speaker, text }) =>
-      processVoice(speaker, text).catch(console.error)
-    );
-    bot.on("disconnected", () => transcriber.disconnect());
-  } else {
-    // ── Whisper fallback path ────────────────────────────────────────────────
+  // Whisper pipeline — used as fallback or primary when Deepgram is absent
+  const startWhisperPipeline = () => {
+    console.log("[Main] Starting Whisper audio pipeline.");
     const vad = new VoiceActivityDetector();
     bot.on("audio", (frame: Buffer) => vad.processFrame(frame));
     vad.on("segment", async (segment: Buffer) => {
@@ -115,6 +102,35 @@ async function handleMeeting(meeting: UpcomingMeeting) {
         console.error("[Main] Whisper error:", err);
       }
     });
+  };
+
+  if (env.deepgram.apiKey) {
+    // ── Deepgram streaming path ──────────────────────────────────────────────
+    const transcriber = new DeepgramTranscriber();
+    let deepgramActive = false;
+
+    try {
+      await transcriber.connect();
+      deepgramActive = true;
+    } catch (err) {
+      console.error("[Main] Deepgram failed to connect — using Whisper:", err);
+      startWhisperPipeline();
+    }
+
+    if (deepgramActive) {
+      bot.on("audio", (frame: Buffer) => transcriber.sendAudio(frame));
+      transcriber.on("utterance", ({ speaker, text }) =>
+        processVoice(speaker, text).catch(console.error)
+      );
+      // If Deepgram drops mid-meeting, switch to Whisper automatically
+      transcriber.on("closed", () => {
+        console.warn("[Main] Deepgram connection closed — switching to Whisper.");
+        startWhisperPipeline();
+      });
+      bot.on("disconnected", () => transcriber.disconnect());
+    }
+  } else {
+    startWhisperPipeline();
   }
 
   // ── 5. Chat pipeline — auth-checked, code-aware ───────────────────────────
