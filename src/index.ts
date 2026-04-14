@@ -1,6 +1,6 @@
 import { env, requireGoogle } from "./config/env.js";
 import { CalendarMonitor, UpcomingMeeting } from "./calendar/monitor.js";
-import { MeetJoiner, MeetMediaConnection } from "./meet/joiner.js";
+import { PlaywrightMeetBot } from "./meet/playwright-bot.js";
 import { VoiceActivityDetector } from "./audio/vad.js";
 import { transcribeAudio } from "./audio/stt.js";
 import { synthesizeSpeech } from "./audio/tts.js";
@@ -13,34 +13,37 @@ async function handleMeeting(meeting: UpcomingMeeting) {
   console.log(`Meet link: ${meeting.meetLink}`);
   console.log(`${"=".repeat(60)}\n`);
 
-  const joiner = new MeetJoiner();
+  const bot = new PlaywrightMeetBot();
   const agent = new MeetingAgent();
   const vad = new VoiceActivityDetector();
-  let connection: MeetMediaConnection;
 
   try {
-    connection = await joiner.join(meeting.meetLink);
+    await bot.join(meeting.meetLink);
   } catch (err) {
     console.error("[Main] Failed to join meeting:", err);
     return;
   }
+
+  // ── Voice pipeline: audio frame → VAD → Whisper → agent → TTS/chat ─────────
+  bot.on("audio", (frame: Buffer) => {
+    vad.processFrame(frame);
+  });
 
   vad.on("segment", async (segment: Buffer) => {
     try {
       const text = await transcribeAudio(segment);
       if (!text.trim()) return;
 
-      console.log(`[Transcript] Participant: ${text}`);
-      const response = await agent.processUtterance("Participant", text);
+      console.log(`[Transcript] ${text}`);
+      const response = await agent.processUtterance("Participant", text, "voice");
 
       if (response) {
-        console.log(`[Agent] (${response.channel}) ${response.text}`);
-
+        console.log(`[Nova] (${response.channel}) ${response.text}`);
         if (response.channel === "voice") {
           const audio = await synthesizeSpeech(response.text);
-          connection.sendAudio(audio);
+          bot.sendAudio(audio);
         } else {
-          await connection.sendChat(response.text);
+          await bot.sendChat(response.text);
         }
       }
     } catch (err) {
@@ -48,11 +51,27 @@ async function handleMeeting(meeting: UpcomingMeeting) {
     }
   });
 
-  connection.on("audio", (frame: Buffer) => {
-    vad.processFrame(frame);
+  // ── Chat pipeline: typed message → auth guard → agent → TTS/chat ────────────
+  bot.on("chat", async (sender: string, text: string) => {
+    try {
+      console.log(`[Chat] ${sender}: ${text}`);
+      const response = await agent.processUtterance(sender, text, "chat");
+
+      if (response) {
+        console.log(`[Nova] (${response.channel}) ${response.text}`);
+        if (response.channel === "voice") {
+          const audio = await synthesizeSpeech(response.text);
+          bot.sendAudio(audio);
+        } else {
+          await bot.sendChat(response.text);
+        }
+      }
+    } catch (err) {
+      console.error("[Main] Error processing chat message:", err);
+    }
   });
 
-  connection.on("disconnected", () => {
+  bot.on("disconnected", () => {
     console.log(`[Main] Disconnected from meeting: ${meeting.summary}`);
   });
 }

@@ -10,6 +10,7 @@
     "dev": "tsx src/index.ts",
     "index-vault": "tsx src/knowledge/indexer.ts",
     "oauth-setup": "tsx src/config/oauth-setup.ts",
+    "meet-auth": "tsx src/config/meet-auth.ts",
     "test-agent": "tsx src/test-agent.ts"
   },
   "engines": {
@@ -22,7 +23,8 @@
     "@lancedb/lancedb": "^0.27.1",
     "dotenv": "^17.3.1",
     "googleapis": "^171.4.0",
-    "openai": "^6.33.0"
+    "openai": "^6.33.0",
+    "playwright": "^1.50.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

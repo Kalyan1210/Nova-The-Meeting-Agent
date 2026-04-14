@@ -4,3 +4,4 @@ dist/
 .env
 *.tsbuildinfo
 .lancedb/
+.nova-session.json

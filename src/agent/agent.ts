@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env.js";
 import { SYSTEM_PROMPT } from "./prompt.js";
 import { TranscriptBuffer } from "./transcript.js";
+import { hasWakeWord, isAuthorized } from "./guards.js";
 import { searchKnowledge } from "../knowledge/store.js";
 import { createCalendarEvent } from "../calendar/events.js";
 import { listCalendarEvents } from "../calendar/query.js";
@@ -226,30 +227,38 @@ export class MeetingAgent {
   private transcript = new TranscriptBuffer();
   private model = "claude-sonnet-4-20250514";
 
+  /**
+   * Process an utterance from the meeting.
+   *
+   * @param speaker  Name or email of the speaker.
+   * @param text     Transcribed or typed text.
+   * @param source   "voice" (transcribed audio) or "chat" (typed message).
+   *                 Chat messages enforce the AUTHORIZED_EMAILS whitelist;
+   *                 voice messages only require the wake word.
+   */
   async processUtterance(
     speaker: string,
-    text: string
+    text: string,
+    source: "voice" | "chat" = "voice"
   ): Promise<AgentResponse | null> {
     this.transcript.add(speaker, text);
 
-    if (!this.shouldRespond(text)) return null;
+    if (!this.shouldRespond(speaker, text, source)) return null;
 
-    return this.generateResponse(text);
+    // Strip the wake word before passing to Claude so it doesn't
+    // repeat "hey nova" back at the user.
+    const cleaned = text.replace(/^(hey\s+nova[,!?:]?\s*|nova[,!?:]?\s+)/i, "").trim();
+    return this.generateResponse(cleaned || text);
   }
 
-  private shouldRespond(text: string): boolean {
-    const lower = text.toLowerCase().trim();
-    if (lower.includes("?")) return true;
-    if (lower.includes("nova")) return true;
-
-    const triggers = [
-      "what", "how", "why", "when", "where", "who", "which",
-      "can you", "could you", "do we", "does", "is there", "are there",
-      "tell me", "explain", "help me",
-      "schedule", "create", "add", "note", "write", "save",
-      "search", "find", "check", "look up",
-    ];
-    return triggers.some((s) => lower.startsWith(s));
+  private shouldRespond(
+    speaker: string,
+    text: string,
+    source: "voice" | "chat"
+  ): boolean {
+    if (!hasWakeWord(text)) return false;
+    if (!isAuthorized(speaker, source)) return false;
+    return true;
   }
 
   private async generateResponse(

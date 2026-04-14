@@ -47,6 +47,12 @@ export const env = {
   tavily: {
     apiKey: optional("TAVILY_API_KEY"),
   },
+  agent: {
+    authorizedEmails: optional("AUTHORIZED_EMAILS")
+      .split(",")
+      .map((e) => e.trim())
+      .filter(Boolean),
+  },
 } as const;
 
 /**
