@@ -284,6 +284,9 @@ export class PlaywrightMeetBot extends EventEmitter {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--autoplay-policy=no-user-gesture-required",
+        // Hide Playwright's automation flag so Google Meet doesn't
+        // detect the bot and close the page with a 403.
+        "--disable-blink-features=AutomationControlled",
       ],
     });
 
@@ -304,6 +307,11 @@ export class PlaywrightMeetBot extends EventEmitter {
     }
 
     this.page = await this.context.newPage();
+
+    // Hide automation fingerprint before any page JS runs
+    await this.page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => false });
+    });
 
     // Inject avatar + audio bridge before any page JS runs
     await this.page.addInitScript(BROWSER_INIT_SCRIPT);
@@ -364,43 +372,7 @@ export class PlaywrightMeetBot extends EventEmitter {
   private async handleJoinFlow(): Promise<void> {
     const page = this.page!;
 
-    // Turn off mic and camera toggles before joining
-    // (Nova speaks via injection, not system mic)
-    await this.tryClick(page, [
-      '[aria-label*="Turn off microphone" i]',
-      '[data-is-muted="false"][aria-label*="microphone" i]',
-    ]);
-
-    // Wait for join button, try multiple selectors
-    const joinSelectors = [
-      'button:has-text("Join now")',
-      'button:has-text("Ask to join")',
-      '[data-mdc-dialog-action="join"]',
-      '[jsname="Qx7uuf"]',
-    ];
-
-    let joined = false;
-    for (let attempt = 0; attempt < 3 && !joined; attempt++) {
-      for (const sel of joinSelectors) {
-        try {
-          const btn = await page.$(sel);
-          if (btn) {
-            await btn.click();
-            console.log(`[PlaywrightBot] Clicked: ${sel}`);
-            joined = true;
-            break;
-          }
-        } catch {
-          // Try next
-        }
-      }
-      if (!joined) await page.waitForTimeout(2000);
-    }
-
-    // Wait for meeting UI to fully load
-    await page.waitForTimeout(3000);
-
-    // Detect hard-stop error screens (meeting ended, not invited, etc.)
+    // Hard-stop phrases — bail out immediately if seen
     const errorPhrases = [
       "you can't join this video call",
       "this call has ended",
@@ -408,12 +380,90 @@ export class PlaywrightMeetBot extends EventEmitter {
       "no longer available",
       "you're not allowed",
     ];
-    for (const phrase of errorPhrases) {
-      const el = await page.$(`text=/${phrase}/i`);
-      if (el) {
-        throw new Error(`Google Meet blocked join: "${phrase}"`);
+
+    const checkErrors = async () => {
+      for (const phrase of errorPhrases) {
+        try {
+          const el = await page.$(`text=/${phrase}/i`);
+          if (el) throw new Error(`Google Meet blocked join: "${phrase}"`);
+        } catch (e) {
+          if ((e as Error).message.startsWith("Google Meet blocked")) throw e;
+        }
+      }
+    };
+
+    // Mute mic before joining (Nova speaks via audio injection, not mic)
+    await this.tryClick(page, [
+      '[aria-label*="Turn off microphone" i]',
+      '[data-is-muted="false"][aria-label*="microphone" i]',
+    ]);
+
+    // Wait for the pre-join screen to render
+    await page.waitForTimeout(2000);
+    await checkErrors();
+
+    // Click whichever join button is present
+    const joinSelectors = [
+      'button:has-text("Join now")',
+      'button:has-text("Ask to join")',
+      '[data-mdc-dialog-action="join"]',
+      '[jsname="Qx7uuf"]',
+    ];
+
+    let clicked = false;
+    for (let attempt = 0; attempt < 4 && !clicked; attempt++) {
+      for (const sel of joinSelectors) {
+        try {
+          const btn = await page.$(sel);
+          if (btn) {
+            await btn.click();
+            console.log(`[PlaywrightBot] Clicked join button: ${sel}`);
+            clicked = true;
+            break;
+          }
+        } catch { /* try next */ }
+      }
+      if (!clicked) await page.waitForTimeout(2000);
+    }
+
+    // After clicking "Ask to join", wait up to 60 s for the host to admit us.
+    // While waiting, keep checking for error screens so we exit cleanly if
+    // the meeting ends or blocks us.
+    console.log("[PlaywrightBot] Waiting to be admitted to the meeting...");
+    const admitSelectors = [
+      // Indicators that we're inside the call
+      '[data-call-ended]',
+      '[data-self-name]',
+      '.crqnQb',           // meeting participant strip
+      '[jsname="r4nke"]',  // participant name in new UI
+    ];
+
+    for (let waited = 0; waited < 60; waited += 2) {
+      await page.waitForTimeout(2000);
+      await checkErrors();
+
+      for (const sel of admitSelectors) {
+        try {
+          const el = await page.$(sel);
+          if (el) {
+            console.log("[PlaywrightBot] Admitted to meeting.");
+            return;
+          }
+        } catch { /* page may be transitioning */ }
+      }
+
+      // Re-check for join button (sometimes it re-renders)
+      for (const sel of joinSelectors) {
+        try {
+          const btn = await page.$(sel);
+          if (btn) { await btn.click(); break; }
+        } catch { /* ok */ }
       }
     }
+
+    // If we get here we're likely in — Meet UI sometimes doesn't match
+    // our selectors but the call is still active.
+    console.log("[PlaywrightBot] Join wait complete (selectors may not match current Meet UI).");
   }
 
   private async tryClick(page: Page, selectors: string[]): Promise<void> {
