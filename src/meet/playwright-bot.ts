@@ -115,13 +115,31 @@ const BROWSER_INIT_SCRIPT = /* js */ `
   // Receives raw 24 kHz Int16 LE mono chunks and schedules them back-to-back
   // on the AudioContext timeline for gapless playback.
   let _pcmScheduledUntil = 0;
+  let _pcmRemainder = null; // leftover byte when a chunk arrives at odd length
 
   window.__injectPCMChunk = function (base64Pcm, isFirst) {
     ensureAudioCtx();
     try {
       const bin = atob(base64Pcm);
-      const bytes = new Uint8Array(bin.length);
+      let bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+      // Prepend any leftover byte from the previous chunk
+      if (_pcmRemainder !== null) {
+        const merged = new Uint8Array(1 + bytes.length);
+        merged[0] = _pcmRemainder;
+        merged.set(bytes, 1);
+        bytes = merged;
+        _pcmRemainder = null;
+      }
+
+      // Int16Array requires even byte length — save odd trailing byte for next chunk
+      if (bytes.length % 2 !== 0) {
+        _pcmRemainder = bytes[bytes.length - 1];
+        bytes = bytes.slice(0, bytes.length - 1);
+      }
+
+      if (bytes.length === 0) return;
 
       // View raw bytes as 16-bit little-endian PCM samples
       const i16 = new Int16Array(bytes.buffer);
