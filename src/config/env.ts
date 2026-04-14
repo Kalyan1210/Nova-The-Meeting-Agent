@@ -33,6 +33,10 @@ export const env = {
   elevenlabs: {
     apiKey: optional("ELEVENLABS_API_KEY"),
     voiceId: optional("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+    fallbackVoiceId: optional("ELEVENLABS_FALLBACK_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+  },
+  meet: {
+    headless: optional("MEET_HEADLESS", "true") !== "false",
   },
   knowledge: {
     vaultPath: optional("OBSIDIAN_VAULT_PATH"),

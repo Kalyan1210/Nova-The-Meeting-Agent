@@ -2,14 +2,8 @@ import { env } from "../config/env.js";
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
 
-/**
- * Convert text to speech using ElevenLabs streaming API.
- * Returns raw audio bytes (mpeg) suitable for playback or WebRTC injection.
- */
-export async function synthesizeSpeech(text: string): Promise<Buffer> {
-  const url = `${ELEVENLABS_BASE}/text-to-speech/${env.elevenlabs.voiceId}/stream`;
-
-  const response = await fetch(url, {
+async function ttsRequest(voiceId: string, text: string): Promise<Response> {
+  return fetch(`${ELEVENLABS_BASE}/text-to-speech/${voiceId}/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -26,6 +20,21 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
       },
     }),
   });
+}
+
+/**
+ * Convert text to speech using ElevenLabs streaming API.
+ * Automatically falls back to ELEVENLABS_FALLBACK_VOICE_ID when the
+ * primary voice returns 402 (paid-tier library voice on a free account).
+ * Returns raw audio bytes (mpeg) suitable for playback or WebRTC injection.
+ */
+export async function synthesizeSpeech(text: string): Promise<Buffer> {
+  let response = await ttsRequest(env.elevenlabs.voiceId, text);
+
+  if (response.status === 402 && env.elevenlabs.fallbackVoiceId !== env.elevenlabs.voiceId) {
+    console.warn("[TTS] Primary voice returned 402 — falling back to free-tier voice.");
+    response = await ttsRequest(env.elevenlabs.fallbackVoiceId, text);
+  }
 
   if (!response.ok) {
     const body = await response.text();
