@@ -226,7 +226,7 @@ export interface AgentResponse {
  */
 export class MeetingAgent extends EventEmitter {
   private transcript = new TranscriptBuffer();
-  private model = "claude-sonnet-4-20250514";
+  private model = "claude-haiku-4-5-20251001";
 
   /**
    * Process an utterance from the meeting.

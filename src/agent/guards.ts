@@ -13,9 +13,18 @@ const WAKE_PATTERNS = [
 
 /**
  * Returns true if the text is addressed to Nova.
+ *
+ * Deepgram smart_format adds punctuation, so "Hey Nova" arrives as
+ * "Hey, Nova." — we strip punctuation before matching so patterns
+ * like /hey\s+nova/ still work.
  */
 export function hasWakeWord(text: string): boolean {
-  return WAKE_PATTERNS.some((p) => p.test(text.trim()));
+  // Normalize for matching only: strip punctuation, collapse spaces
+  const normalized = text
+    .trim()
+    .replace(/[,\.!?;:]/g, " ")
+    .replace(/\s+/g, " ");
+  return WAKE_PATTERNS.some((p) => p.test(normalized));
 }
 
 /**
