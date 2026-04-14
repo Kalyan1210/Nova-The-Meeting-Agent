@@ -399,6 +399,21 @@ export class PlaywrightMeetBot extends EventEmitter {
 
     // Wait for meeting UI to fully load
     await page.waitForTimeout(3000);
+
+    // Detect hard-stop error screens (meeting ended, not invited, etc.)
+    const errorPhrases = [
+      "you can't join this video call",
+      "this call has ended",
+      "meeting has ended",
+      "no longer available",
+      "you're not allowed",
+    ];
+    for (const phrase of errorPhrases) {
+      const el = await page.$(`text=/${phrase}/i`);
+      if (el) {
+        throw new Error(`Google Meet blocked join: "${phrase}"`);
+      }
+    }
   }
 
   private async tryClick(page: Page, selectors: string[]): Promise<void> {

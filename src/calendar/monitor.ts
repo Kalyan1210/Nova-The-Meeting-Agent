@@ -66,6 +66,15 @@ export class CalendarMonitor extends EventEmitter {
         const meetLink = this.extractMeetLink(event);
         if (!meetLink) continue;
 
+        // Skip events that started more than 2 minutes ago — avoids rejoining
+        // a meeting that already ended after a process restart clears seenEventIds.
+        const startTime = new Date(event.start?.dateTime ?? event.start?.date ?? now);
+        if (now.getTime() - startTime.getTime() > 2 * 60_000) {
+          console.log(`[CalendarMonitor] Skipping past event: "${event.summary ?? event.id}"`);
+          this.seenEventIds.add(event.id); // mark seen so we don't log it every poll
+          continue;
+        }
+
         this.seenEventIds.add(event.id);
 
         const meeting: UpcomingMeeting = {
