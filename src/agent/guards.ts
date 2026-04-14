@@ -43,6 +43,11 @@ export function isAuthorized(
   // allow it — they were invited to the meeting, so they're trusted.
   if (!speakerEmail || speakerEmail === "unknown") return true;
 
+  // Meet sometimes exposes a display name ("YALLA SAI KALYAN") instead of
+  // an email.  A display name can't be matched against the email whitelist,
+  // so treat it the same as "unknown" — trusted by virtue of being invited.
+  if (!speakerEmail.includes("@")) return true;
+
   return list.some(
     (e) => e.toLowerCase() === speakerEmail.toLowerCase()
   );
