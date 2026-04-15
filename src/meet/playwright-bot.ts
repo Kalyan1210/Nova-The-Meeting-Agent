@@ -116,6 +116,7 @@ const BROWSER_INIT_SCRIPT = /* js */ `
   // on the AudioContext timeline for gapless playback.
   let _pcmScheduledUntil = 0;
   let _pcmRemainder = null; // leftover byte when a chunk arrives at odd length
+  let _activeSources = [];  // track live BufferSources so we can stop them on barge-in
 
   window.__injectPCMChunk = function (base64Pcm, isFirst) {
     ensureAudioCtx();
@@ -159,6 +160,8 @@ const BROWSER_INIT_SCRIPT = /* js */ `
       src.buffer = buf;
       src.connect(audioDest);
       src.start(_pcmScheduledUntil);
+      _activeSources.push(src);
+      src.onended = () => { _activeSources = _activeSources.filter(s => s !== src); };
       _pcmScheduledUntil += buf.duration;
     } catch (e) {
       console.warn('[Nova] PCM chunk error:', e);
@@ -169,6 +172,15 @@ const BROWSER_INIT_SCRIPT = /* js */ `
     // Turn off the speaking indicator once all queued audio has played
     const remaining = Math.max(0, (_pcmScheduledUntil - audioCtx.currentTime) * 1000 + 50);
     setTimeout(() => window.__novaSetSpeaking(false), remaining);
+  };
+
+  // Stop all in-flight audio immediately (barge-in / interruption)
+  window.__cancelAudio = function () {
+    _activeSources.forEach(src => { try { src.stop(); } catch(_) {} });
+    _activeSources = [];
+    _pcmScheduledUntil = 0;
+    _pcmRemainder = null;
+    window.__novaSetSpeaking(false);
   };
 
   // ── getUserMedia override — return avatar canvas + Nova's audio stream ─────
@@ -333,6 +345,8 @@ export class PlaywrightMeetBot extends EventEmitter {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private _speaking = false;
+  // Incremented on every cancelAudio() call; sendAudioStream checks it to bail out
+  private _audioGeneration = 0;
 
   async join(meetLink: string): Promise<void> {
     this.browser = await chromium.launch({
@@ -559,16 +573,32 @@ export class PlaywrightMeetBot extends EventEmitter {
   // ── Audio / chat outbound ──────────────────────────────────────────────────
 
   /**
+   * Cancel any currently playing audio immediately (barge-in support).
+   * Stops all scheduled browser AudioBufferSources and resets the PCM queue.
+   */
+  cancelAudio(): void {
+    this._audioGeneration++;
+    this.page?.evaluate(() => (window as any).__cancelAudio()).catch(() => {});
+  }
+
+  /**
    * Stream raw PCM chunks (24 kHz Int16 LE mono) into the meeting.
    * Sends each chunk to the browser as it arrives so playback starts
    * on the first chunk (~100ms) instead of waiting for the full file.
+   * Stops early if cancelAudio() is called mid-stream (barge-in).
    */
   async sendAudioStream(chunks: AsyncGenerator<Buffer>): Promise<void> {
     if (!this.page) return;
+    const myGeneration = this._audioGeneration;
     let isFirst = true;
     try {
       await this.page.evaluate(() => (window as any).__novaSetSpeaking(true));
       for await (const chunk of chunks) {
+        if (this._audioGeneration !== myGeneration) {
+          // Barge-in cancelled this stream — drain the generator cleanly
+          await chunks.return?.(undefined);
+          return;
+        }
         const b64 = chunk.toString("base64");
         await this.page
           .evaluate(
@@ -579,9 +609,11 @@ export class PlaywrightMeetBot extends EventEmitter {
           .catch(() => {});
         isFirst = false;
       }
-      await this.page
-        .evaluate(() => (window as any).__pcmStreamEnd())
-        .catch(() => {});
+      if (this._audioGeneration === myGeneration) {
+        await this.page
+          .evaluate(() => (window as any).__pcmStreamEnd())
+          .catch(() => {});
+      }
     } catch (err) {
       console.error("[PlaywrightBot] sendAudioStream error:", err);
     }

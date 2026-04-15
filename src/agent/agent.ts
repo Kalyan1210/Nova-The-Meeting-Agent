@@ -227,6 +227,9 @@ export interface AgentResponse {
 export class MeetingAgent extends EventEmitter {
   private transcript = new TranscriptBuffer();
   private model = "claude-haiku-4-5-20251001";
+  // When Nova asks a question, open a 30s window where the next utterance
+  // is processed without requiring the wake word (conversational follow-through).
+  private conversationModeUntil = 0;
 
   /**
    * Process an utterance from the meeting.
@@ -251,6 +254,14 @@ export class MeetingAgent extends EventEmitter {
     const cleaned = text.replace(/^(hey\s+nova[,!?:]?\s*|nova[,!?:]?\s+)/i, "").trim();
     const response = await this.generateResponse(cleaned || text);
 
+    // If Nova's response ends with a question, open a 30s conversation window
+    // so the user can reply naturally without saying "hey nova" again.
+    if (response && /\?/.test(response.text)) {
+      this.conversationModeUntil = Date.now() + 30_000;
+    } else {
+      this.conversationModeUntil = 0;
+    }
+
     // Emit so external listeners (conflict detector, etc.) can react
     this.emit("utterance-processed", text);
 
@@ -262,11 +273,18 @@ export class MeetingAgent extends EventEmitter {
     return this.transcript.format();
   }
 
+  /** True when Nova asked a question and is waiting for a follow-up reply. */
+  isConversationMode(): boolean {
+    return Date.now() < this.conversationModeUntil;
+  }
+
   private shouldRespond(
     speaker: string,
     text: string,
     source: "voice" | "chat"
   ): boolean {
+    // In conversation mode (Nova asked a question), accept follow-up without wake word
+    if (this.isConversationMode() && isAuthorized(speaker, source)) return true;
     if (!hasWakeWord(text)) return false;
     if (!isAuthorized(speaker, source)) return false;
     return true;

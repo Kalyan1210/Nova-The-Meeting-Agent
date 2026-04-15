@@ -5,6 +5,7 @@ import { VoiceActivityDetector } from "./audio/vad.js";
 import { DeepgramTranscriber } from "./audio/deepgram-stt.js";
 import { transcribeAudio } from "./audio/stt.js";
 import { streamSpeech } from "./audio/tts.js";
+import { hasWakeWord } from "./agent/guards.js";
 import { MeetingAgent } from "./agent/agent.js";
 import { watchVault } from "./knowledge/watcher.js";
 import { generateMeetingBrief, generateLateJoinerBrief } from "./agent/briefer.js";
@@ -68,6 +69,12 @@ async function handleMeeting(meeting: UpcomingMeeting) {
     if (!text.trim()) return;
     utteranceCount++;
     console.log(`[${speaker}] ${text}`);
+
+    // Barge-in: if user invokes Nova while she's speaking, stop audio immediately
+    // so the response feels instant rather than waiting for current speech to finish.
+    if (hasWakeWord(text) || agent.isConversationMode()) {
+      bot.cancelAudio();
+    }
 
     const response = await agent.processUtterance(speaker, text, "voice");
     if (response) {
