@@ -482,12 +482,6 @@ export class PlaywrightMeetBot extends EventEmitter {
       }
     };
 
-    // Mute mic before joining (Nova speaks via audio injection, not mic)
-    await this.tryClick(page, [
-      '[aria-label*="Turn off microphone" i]',
-      '[data-is-muted="false"][aria-label*="microphone" i]',
-    ]);
-
     // Wait for the pre-join screen to render
     await page.waitForTimeout(2000);
     await checkErrors();
