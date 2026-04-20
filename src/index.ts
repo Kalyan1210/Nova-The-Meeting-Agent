@@ -26,6 +26,53 @@ function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// ── Audio stream helper ──────────────────────────────────────────────────────
+// Collects Realtime API audio deltas and feeds them as a single continuous
+// async generator into bot.sendAudioStream(). This ensures isFirst=true fires
+// only on the first chunk of a response, and __pcmStreamEnd fires only once.
+
+function makeAudioStreamer(bot: PlaywrightMeetBot) {
+  let chunks: Buffer[] = [];
+  let streaming = false;
+  let wakeup: (() => void) | null = null;
+
+  async function* gen(): AsyncGenerator<Buffer> {
+    while (true) {
+      if (chunks.length > 0) {
+        yield chunks.shift()!;
+      } else if (!streaming) {
+        return;
+      } else {
+        await new Promise<void>((r) => { wakeup = r; });
+      }
+    }
+  }
+
+  function push(chunk: Buffer) {
+    if (!streaming) {
+      streaming = true;
+      chunks = [chunk];
+      bot.sendAudioStream(gen()).catch(() => {});
+    } else {
+      chunks.push(chunk);
+      const w = wakeup; wakeup = null; w?.();
+    }
+  }
+
+  function end() {
+    streaming = false;
+    const w = wakeup; wakeup = null; w?.();
+  }
+
+  function cancel() {
+    chunks = [];
+    streaming = false;
+    const w = wakeup; wakeup = null; w?.();
+  }
+
+  return { push, end, cancel };
+}
+
 // ── Meeting handler ─────────────────────────────────────────────────────────
 
 async function handleMeeting(meeting: UpcomingMeeting) {
@@ -85,21 +132,20 @@ async function handleMeeting(meeting: UpcomingMeeting) {
 
   // ── 4. Set up OpenAI Realtime API session ─────────────────────────────
   const resampler = new Resampler(16000, 24000);
+  const audioStreamer = makeAudioStreamer(bot);
 
   const session = new RealtimeSession({
     instructions: buildRealtimeInstructions(),
 
     onAudioDelta: (audio: Buffer) => {
-      // PCM16 24kHz from Realtime API → inject into browser
-      bot.sendAudioStream(
-        (async function* () {
-          yield audio;
-        })()
-      ).catch(() => {}); // fire and forget individual chunks
+      // Push each PCM delta into the single continuous stream so isFirst
+      // only fires on the first chunk and __pcmStreamEnd fires once at end.
+      audioStreamer.push(audio);
     },
 
     onAudioDone: () => {
       log.info("Nova finished speaking");
+      audioStreamer.end();
     },
 
     onTranscript: (text: string, _itemId: string) => {
@@ -175,6 +221,7 @@ async function handleMeeting(meeting: UpcomingMeeting) {
 
     onSpeechStarted: () => {
       // Barge-in: user started speaking while Nova is outputting
+      audioStreamer.cancel();
       bot.cancelAudio();
       session.cancelResponse();
       log.info("barge-in detected — cancelled response");
