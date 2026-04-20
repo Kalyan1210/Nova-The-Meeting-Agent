@@ -5,8 +5,10 @@ import { env } from "../config/env.js";
  * Both voice transcripts and chat messages must match one of these.
  */
 const WAKE_PATTERNS = [
-  /hey\s+nova/i,        // "hey nova" — no \b so works in concatenated chat text
-  /hey\s+noah/i,        // Deepgram/Whisper often mishears "Nova" as "Noah"
+  /hey\s+nova/i,        // "hey nova"
+  /hey\s+noah/i,        // Whisper mishears "Nova" as "Noah"
+  /hey\s+enoa/i,        // Whisper mishears "Nova" as "Enoa"
+  /hey\s+nova/i,        // alternate spelling seen in transcripts
   /\bnova[,!?:]\s/i,    // "nova, ..." / "nova! ..."
   /^nova[\s,]/i,        // "nova what is ..."
 ];
