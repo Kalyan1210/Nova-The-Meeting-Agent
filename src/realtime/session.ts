@@ -26,6 +26,11 @@ export interface RealtimeSessionOpts {
 
 const REALTIME_URL = "wss://api.openai.com/v1/realtime";
 
+// Prune conversation items when input tokens exceed this threshold
+const CONTEXT_PRUNE_THRESHOLD = 2500;
+// Number of oldest items to delete per prune pass
+const CONTEXT_PRUNE_BATCH = 8;
+
 export class RealtimeSession extends EventEmitter {
   private ws: WebSocket | null = null;
   private state: SessionState = "disconnected";
@@ -34,6 +39,8 @@ export class RealtimeSession extends EventEmitter {
   private maxReconnectAttempts = 5;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  // Ordered list of conversation item IDs for context pruning
+  private itemIds: string[] = [];
 
   constructor(opts: RealtimeSessionOpts) {
     super();
@@ -188,7 +195,7 @@ export class RealtimeSession extends EventEmitter {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 300,
-          silence_duration_ms: 700,
+          silence_duration_ms: 400,
           create_response: false, // Manual control for wake-word / ambient mode
         },
         tools,
@@ -207,6 +214,10 @@ export class RealtimeSession extends EventEmitter {
 
       case "session.updated":
         realtimeLog.info("session config updated");
+        break;
+
+      case "conversation.item.created":
+        if (event.item?.id) this.itemIds.push(event.item.id);
         break;
 
       case "input_audio_buffer.speech_started":
@@ -229,6 +240,10 @@ export class RealtimeSession extends EventEmitter {
       }
 
       case "response.audio.done":
+        // Audio is fully delivered — no valid response to cancel from here.
+        // Set state before calling onAudioDone so barge-in in the callback
+        // doesn't race-send a cancel that will be rejected.
+        this.state = "ready";
         this.opts.onAudioDone();
         break;
 
@@ -251,6 +266,9 @@ export class RealtimeSession extends EventEmitter {
             },
             "response usage"
           );
+          if (event.response.usage.input_tokens > CONTEXT_PRUNE_THRESHOLD) {
+            this.pruneContext();
+          }
         }
         break;
 
@@ -271,6 +289,16 @@ export class RealtimeSession extends EventEmitter {
         // Many event types we don't need to handle explicitly
         break;
     }
+  }
+
+  private pruneContext() {
+    // Delete the oldest N items to keep input tokens under control.
+    // We keep the most recent items so Nova retains short-term context.
+    const toDelete = this.itemIds.splice(0, CONTEXT_PRUNE_BATCH);
+    for (const id of toDelete) {
+      this.send({ type: "conversation.item.delete", item_id: id });
+    }
+    realtimeLog.info({ deleted: toDelete.length, remaining: this.itemIds.length }, "pruned conversation context");
   }
 
   private send(event: ClientEvent) {
